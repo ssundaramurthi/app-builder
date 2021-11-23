@@ -1,0 +1,7 @@
+steps:
+  - label: "Deploying HMAC service to ${STAGE}"
+    command:
+      - "echo Running deployment in ${STAGE}..."
+      - "${PWD}/app/scripts/deploy.sh ${STAGE}"
+      - "echo Running Application Sanity checks in ${STAGE}..."
+      - "${PWD}/app/scripts/app-tests.sh"

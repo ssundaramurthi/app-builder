@@ -1,2 +1,4 @@
 .idea/
 .aws/
+.ssh/
+app/src/app-builder

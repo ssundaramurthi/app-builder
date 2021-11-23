@@ -1,0 +1,16 @@
+--stack-name dev-app-service
+--parameter-overrides
+VpcId=
+VpcCidr=
+PublicSubnets=
+AppAMI=
+AppInstanceClass=t3.micro
+AppELBAlias=App
+AppUpscaleThreshold=750000000
+AppDownscaleThreshold=250000000
+AppLogsDestinationArn=
+AppLogRetention=14
+SslKeyPassphraseEncrypted=
+AppImageRepository=app-alpine
+AppImageVersion=latest
+AppPort=8080

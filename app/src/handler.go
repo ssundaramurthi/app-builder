@@ -23,6 +23,7 @@ func (h handler) token(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "application/json")
     h.stats["requests"] += 1
 
+    // Read the shared secret passed
 	body, _ := io.ReadAll(r.Body)
     response, err := getJsonResponse(body, h.key)
     if err != nil {

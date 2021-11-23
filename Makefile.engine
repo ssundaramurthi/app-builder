@@ -5,7 +5,7 @@ build-ecr-image:
 
 	aws ecr get-login-password | docker login --username AWS --password-stdin $(ecr_endpoint)
 
-	docker build --tag app-alpine:latest . --file app/Dockerfile
+	docker build --tag app-alpine:latest . --file app/Dockerfile --build-arg secret=$SECRET
 
 	docker tag app-alpine:latest $(ecr_endpoint)/app-alpine:latest
 

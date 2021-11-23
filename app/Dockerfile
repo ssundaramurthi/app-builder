@@ -1,5 +1,6 @@
 FROM alpine:3.14
 ARG secret
+EXPOSE 80
 
 RUN apk upgrade && apk add --no-cache git make musl-dev go bash
 
@@ -16,4 +17,4 @@ COPY app/src/*.go /go/src/
 
 WORKDIR $GOPATH
 
-SHELL ["/bin/bash"]
+ENTRYPOINT ["/bin/bash", "-c", "go run /go/src/main.go /go/src/handler.go"]

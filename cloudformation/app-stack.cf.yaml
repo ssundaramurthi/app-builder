@@ -1,0 +1,226 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Template for App
+Parameters:
+  TemplatesS3Bucket:
+    Type: String
+    Description: S3 Bucket with the components templates
+  InstallationName:
+    Type: String
+    Description: Unique stack installation name
+  RuntimeEnvironment:
+    Type: String
+    Description: The runtime environment config tag
+    Default: dev
+  Route53ZoneDomain:
+    Type: String
+    Description: Route53 zone domain that represents the environment
+  AppEndpointServiceNamePrefix:
+    Type: String
+    Description: App VPC Endpoint Service Name Prefix
+    Default: com.amazonaws.vpce.ap-southeast-2.
+  AppEndpointServiceId:
+    Type: String
+    Description: App VPC Endpoint Service Name Logical ID
+  MonitoringTestUrl:
+    Type: String
+    Description: URL to fetch through the proxies
+    Default: https://www.google.com
+  AlarmSNSTopicArn:
+    Type: String
+    Description: ARN of the SNS topic to send alarms to
+  AppStatusLambdaCode:
+    Type: String
+    Description: S3 key with the Latency lambda function source
+  AppPort:
+    Type: Number
+    Description: Port number App listens on
+    Default: 8080
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID for App endpoints
+  VpcCidr:
+    Type: String
+    Description: VPC CIDR for App endpoints
+  SubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private Tier Subnet 1 - ap-southeast-2a
+  SubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private Tier Subnet 2 - ap-southeast-2b
+  SubnetC:
+    Type: AWS::EC2::Subnet::Id
+    Description: Private Tier Subnet 3 - ap-southeast-2c
+
+Resources:
+  AppEndpointSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allows connections from ELB to App farm members
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: !Ref AppPort
+          ToPort: !Ref AppPort
+          CidrIp: 192.168.0.0/16
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub App-${InstallationName}
+
+  AppEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties:
+      ServiceName: !Sub "${AppEndpointServiceNamePrefix}${AppEndpointServiceId}"
+      VpcEndpointType: Interface
+      VpcId: !Ref VpcId
+      SubnetIds:
+        - !Ref SubnetA
+        - !Ref SubnetB
+        - !Ref SubnetC
+      SecurityGroupIds:
+        - !Ref AppEndpointSG
+
+  EndpointDnsRecordSet:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneName: !Sub ${Route53ZoneDomain}.
+      Name: !Sub App.${Route53ZoneDomain}
+      Type: CNAME
+      TTL: '300'
+      ResourceRecords:
+        - !Select [1, !Split [':', !Select [0, !GetAtt AppEndpoint.DnsEntries]]]
+
+  AppStatusExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/RoleBoundaryPolicy"
+      Policies:
+        - PolicyName: PutCloudwatchMetric
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - cloudwatch:PutMetricData
+                Effect: Allow
+                Resource: '*'
+
+  AppStatusLambdaSG:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Permit DNS traffic from allowed subnets
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+        Description: Needed for accessing AWS API
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: 443
+        ToPort: 443
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: !Ref AppPort
+        ToPort: !Ref AppPort
+        CidrIp: !Ref VpcCidr
+
+  AppStatusLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      VpcConfig:
+        SubnetIds:
+          - !Ref SubnetA
+          - !Ref SubnetB
+        SecurityGroupIds:
+          - !Ref AppStatusLambdaSG
+      Code:
+        S3Bucket: !Ref TemplatesS3Bucket
+        S3Key: !Ref AppStatusLambdaCode
+      Description: Monitors status of the App farm
+      Handler: monitorAppEndpoint.handler
+      MemorySize: 128
+      Role: !GetAtt AppStatusExecutionRole.Arn
+      Runtime: python3.9
+      Timeout: 90
+      Environment:
+        Variables:
+          INSTALLATION_NAME: !Ref InstallationName
+          App_CONNECTION: !Sub ${EndpointDnsRecordSet}:${AppPort}
+          TEST_URL: !Ref MonitoringTestUrl
+
+  AppStatusSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Rule for invoking the App monitoring lambda every minute
+      ScheduleExpression: "rate(1 minute)"
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AppStatusLambda.Arn
+          Id: AppStatusLambda
+
+  PermissionForAppStatusLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AppStatusLambda
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AppStatusSchedule.Arn
+
+  AppStatusMonitoringAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${InstallationName}-${Route53ZoneDomain}-AppEndpoint
+      AlarmDescription: Alarms to SNS when App VPC endpoints are out
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+      OKActions:
+        - !Ref AlarmSNSTopicArn
+      InsufficientDataActions:
+        - !Ref AlarmSNSTopicArn
+      MetricName: AppEndpointStatus
+      Namespace: !Ref InstallationName
+      Statistic: Maximum
+      Period: '60'
+      EvaluationPeriods: '3'
+      Threshold: '0'
+      ComparisonOperator:  GreaterThanThreshold
+
+  LamdaTimeoutMonitoringAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${InstallationName}-${Route53ZoneDomain}-AppLambdaErrors
+      AlarmDescription: Alarms to SNS when App Lamda timesout out
+      AlarmActions:
+        - !Ref AlarmSNSTopicArn
+      OKActions:
+        - !Ref AlarmSNSTopicArn
+      InsufficientDataActions:
+        - !Ref AlarmSNSTopicArn
+      MetricName: Errors
+      Namespace: 'AWS/Lambda'
+      Statistic: Maximum
+      Period: '60'
+      EvaluationPeriods: '3'
+      Threshold: '1'
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+         - Name: FunctionName
+           Value: !Ref AppStatusLambda
+
+Outputs:
+  AppEndpoint:
+    Value: !Sub ${EndpointDnsRecordSet}:${AppPort}
+  AppTrustChainUrl:
+    Value: !Sub http://${EndpointDnsRecordSet}/App.chain.pem

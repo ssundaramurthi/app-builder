@@ -1,0 +1,386 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: App Stack
+Parameters:
+  TemplatesS3Bucket:
+    Type: String
+    Description: S3 Bucket with the components templates
+  InstallationName:
+    Type: String
+    Description: Unique stack installation name
+  RuntimeEnvironment:
+    Type: String
+    Description: The runtime environment config tag
+    Default: dev
+  Route53ZoneDomain:
+    Type: String
+    Description: Route53 zone domain that represents the environment
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to deploy the App infrastructure into
+  VpcCidr:
+    Type: String
+    Description: CIDR of VPC to deploy the App infrastructure into
+  PublicSubnets:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of the subnets for cross-AZ autoscaling
+    ConstraintDescription : must be a list if valid EC2 availability zones for the selected Virtual Private Cloud
+  MaxCapacity:
+    Type: Number
+    Description: Maximum capacity of the autoscaling group
+    MinValue: 1
+    Default: 3
+  AppAMI:
+    Description: AMI for App App instances
+    Type: String
+    Default: ami-00e17d1165b9dd3ec
+  AppInstanceClass:
+    Description: App instance class
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - m4.large
+    ConstraintDescription: Select a valid EC2 instance type
+  ServerTagSchedule:
+    Type: String
+    Description: Availability schedule tag to configure on the Cache instances
+    Default: 24x7
+  AppELBAlias:
+    Description: DNS alias for the App ELB
+    Type: String
+    Default: App
+  AppUpscaleThreshold:
+    Description: Threshold for scaling the App Farm up (bytes per second)
+    Type: Number
+    Default: 750000000
+  AppDownscaleThreshold:
+    Description: Threshold for scaling the App Farm down (bytes per second)
+    Type: Number
+    Default: 250000000
+  AppLogsDestinationArn:
+    Type: String
+    Description: ARN of the corresponding CloudWatch destination in Logging Account
+    Default: ''
+  AppLogRetention:
+    Description: Log retention period (days)
+    Type: Number
+    Default: 14
+  AnsibleZip:
+    Description: S3 URL of a zip archive with the Ansible code for App bootstrap
+    Type: String
+  RecycleLambdaCode:
+    Type: String
+    Description: S3 key with the Recycle lambda function source
+  SslBumpEnabled:
+    Type: String
+    Description: Upload keys and certificates and configure App for SSL bump
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+  SslKeyPassphraseEncrypted:
+    Type: String
+    Description: Passphrase for the SSL private key encrypted with KMS
+    Default: ''
+  AppImageRepository:
+    Type: String
+    Description: Docker repository with the App image
+  AppImageVersion:
+    Type: String
+    Description: App image version
+  AppPort:
+    Type: Number
+    Description: Port number App listens on
+    Default: 3128
+
+Conditions:
+  HaveAppLogsDestination: !Not [!Equals [!Ref AppLogsDestinationArn, ''] ]
+  HaveSslBump: !Equals [!Ref SslBumpEnabled, 'true']
+
+Resources:
+  AppLogsGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      RetentionInDays: !Ref AppLogRetention
+
+  AppLogsSubscriptionFilter:
+    Type: AWS::Logs::SubscriptionFilter
+    Condition: HaveAppLogsDestination
+    Properties:
+      FilterPattern: ""
+      LogGroupName: !Ref AppLogsGroup
+      DestinationArn: !Ref AppLogsDestinationArn
+
+  AppFarmMemberRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+      Path: /
+      Policies:
+        - PolicyName: AppInstance
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Action:
+                  - ec2:DescribeAddresses
+                  - ec2:AssociateAddress
+                  - ec2:DescribeInstances
+                Effect: Allow
+                Resource:
+                  - '*'
+              - Action:
+                  - ecr:*
+                Effect: Allow
+                Resource:
+                  - '*'
+              - Action:
+                  - s3:ListBucket
+                Effect: Allow
+                Resource:
+                  - !Sub arn:aws:s3:::${TemplatesS3Bucket}
+              - Action:
+                  - s3:GetObject
+                Effect: Allow
+                Resource:
+                  - !Sub arn:aws:s3:::${TemplatesS3Bucket}/*
+              - Action:
+                  - autoscaling:DescribeAutoScalingInstances
+                  - autoscaling:CompleteLifecycleAction
+                  - autoscaling:RecordLifecycleActionHeartbeat
+                Effect: Allow
+                Resource: '*'
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/EngineerBoundaryPolicy"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+    AppFarmMemberProfile:
+      Type: AWS::IAM::InstanceProfile
+      Properties:
+        Roles:
+          - !Ref AppFarmMemberRole
+
+    AppFarmMemberSG:
+      Type: AWS::EC2::SecurityGroup
+      Properties:
+        GroupDescription: Allows connections from ELB to App farm members
+        SecurityGroupIngress:
+          - Fn::If:
+              - HaveSslBump
+              - IpProtocol: tcp
+                FromPort: 80
+                ToPort: 80
+                CidrIp: !Ref VpcCidr
+              - !Ref AWS::NoValue
+          - IpProtocol: tcp
+            FromPort: !Ref AppPort
+            ToPort: !Ref AppPort
+            CidrIp: !Ref VpcCidr
+        VpcId: !Ref VpcId
+        Tags:
+          - Key: Name
+            Value: !Sub App-${InstallationName}
+
+    AppTargetGroup:
+      Type: AWS::ElasticLoadBalancingV2::TargetGroup
+      Properties:
+        Port: !Ref AppPort
+        Protocol: TCP
+        VpcId: !Ref VpcId
+        HealthCheckIntervalSeconds: 30
+        HealthCheckProtocol: TCP
+        HealthCheckTimeoutSeconds: 10
+        HealthyThresholdCount: 4
+        UnhealthyThresholdCount: 4
+        TargetGroupAttributes:
+          - Key: deregistration_delay.timeout_seconds
+            Value: 600
+
+    AppServeTrustTargetGroup:
+      Type: AWS::ElasticLoadBalancingV2::TargetGroup
+      Condition: HaveSslBump
+      Properties:
+        HealthCheckIntervalSeconds: 30
+        HealthCheckProtocol: TCP
+        HealthCheckTimeoutSeconds: 10
+        HealthyThresholdCount: 4
+        UnhealthyThresholdCount: 4
+        Port: 80
+        Protocol: TCP
+        VpcId: !Ref VpcId
+
+    AppListener:
+      Type: AWS::ElasticLoadBalancingV2::Listener
+      Properties:
+        DefaultActions:
+          - Type: forward
+            TargetGroupArn: !Ref AppTargetGroup
+        LoadBalancerArn: !Ref AppLoadBalancer
+        Port: !Ref AppPort
+        Protocol: TCP
+
+    AppServeTrustListener:
+      Type: AWS::ElasticLoadBalancingV2::Listener
+      Condition: HaveSslBump
+      Properties:
+        DefaultActions:
+          - Type: forward
+            TargetGroupArn: !Ref AppServeTrustTargetGroup
+        LoadBalancerArn: !Ref AppLoadBalancer
+        Port: '80'
+        Protocol: TCP
+
+    AppLoadBalancer:
+      Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+      Properties:
+        Type: network
+        Name: !Sub ${AppELBAlias}-service-endpoint-${InstallationName}
+        IpAddressType: ipv4
+        Scheme: internal
+        Subnets: !Ref PublicSubnets
+        LoadBalancerAttributes:
+          - Key: deletion_protection.enabled
+            Value: true
+
+    AppEndpointService:
+      Type: AWS::EC2::VPCEndpointService
+      Properties:
+        NetworkLoadBalancerArns:
+          - !Ref AppLoadBalancer
+        AcceptanceRequired: false
+
+    AppEIP1:
+      Type: AWS::EC2::EIP
+
+    AppEIP2:
+      Type: AWS::EC2::EIP
+
+    AppEIP3:
+      Type: AWS::EC2::EIP
+
+    AppLaunchConfiguration:
+      Type: AWS::AutoScaling::LaunchConfiguration
+      Properties:
+        IamInstanceProfile: !Ref AppFarmMemberProfile
+        AssociatePublicIpAddress: true
+        ImageId: !Ref AppAMI
+        InstanceType: !Ref AppInstanceClass
+        SecurityGroups:
+          - !Ref AppFarmMemberSG
+        UserData:
+          Fn::Base64:
+            Fn::Sub:
+              - runcmd:
+                  - ecr_endpoint=$(shell aws ecr get-authorization-token | jq -r '.authorizationData[] | .proxyEndpoint' | cut -b 9-)
+                  - docker pull ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepoName}:latest
+                  - docker run -t -d -p
+
+              - ElasticIPs: !Sub ${AppEIP1.AllocationId},${AppEIP2.AllocationId},${AppEIP3.AllocationId}
+
+    AppAutoscalingGroup:
+      Type: AWS::AutoScaling::AutoScalingGroup
+      Properties:
+        VPCZoneIdentifier: !Ref PublicSubnets
+        LaunchConfigurationName: !Ref AppLaunchConfiguration
+        TargetGroupARNs:
+          - !Ref AppTargetGroup
+          - !If [ HaveSslBump, !Ref AppServeTrustTargetGroup, !Ref 'AWS::NoValue' ]
+        MinSize: 1
+        MaxSize: !Ref MaxCapacity
+        TerminationPolicies:
+          - OldestInstance
+        MetricsCollection:
+          - Granularity: 1Minute
+        Tags:
+          - Key: Name
+            Value: APP-SERVER
+            PropagateAtLaunch: True
+          - Key: Availability
+            Value: !Ref ServerTagSchedule
+            PropagateAtLaunch: True
+          - Key: Application
+            Value: Go-Server
+            PropagateAtLaunch: True
+          - Key: Service
+            Value: my-api-service
+            PropagateAtLaunch: True
+          - Key: ProjectCode
+            Value: centralservices
+            PropagateAtLaunch: True
+
+    AppLifecycleHook:
+      Type: AWS::AutoScaling::LifecycleHook
+      Properties:
+        AutoScalingGroupName: !Ref AppAutoscalingGroup
+        LifecycleTransition: "autoscaling:EC2_INSTANCE_LAUNCHING"
+        DefaultResult: ABANDON
+        HeartbeatTimeout: 900
+        LifecycleHookName: AppReady
+
+    AppScaleUpPolicy:
+      Type: AWS::AutoScaling::ScalingPolicy
+      Properties:
+        AdjustmentType: ChangeInCapacity
+        AutoScalingGroupName: !Ref AppAutoscalingGroup
+        Cooldown: 300
+        ScalingAdjustment: 1
+
+    AppScaleDownPolicy:
+      Type: AWS::AutoScaling::ScalingPolicy
+      Properties:
+        AdjustmentType: ChangeInCapacity
+        AutoScalingGroupName: !Ref AppAutoscalingGroup
+        Cooldown: 300
+        ScalingAdjustment: -1
+
+    AppOverloadAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        MetricName: NetworkIn
+        Namespace: AWS/EC2
+        Statistic: Average
+        ComparisonOperator: GreaterThanThreshold
+        Threshold: !Ref AppUpscaleThreshold
+        Period: 300
+        EvaluationPeriods: 1
+        AlarmDescription:
+          Fn::Sub:
+            - Scale up if average NetworkIn > ${Threshold} for 5 minutes
+            - Threshold: !Ref AppUpscaleThreshold
+        Dimensions:
+          - Name: AutoScalingGroupName
+            Value: !Ref AppAutoscalingGroup
+        AlarmActions:
+          - !Ref AppScaleUpPolicy
+
+    AppUnderloadAlarm:
+      Type: AWS::CloudWatch::Alarm
+      Properties:
+        MetricName: NetworkIn
+        Namespace: AWS/EC2
+        Statistic: Average
+        ComparisonOperator: LessThanThreshold
+        Threshold: !Ref AppDownscaleThreshold
+        Period: 300
+        EvaluationPeriods: 6
+        AlarmDescription:
+          Fn::Sub:
+            - Scale down if average NetworkIn < ${Threshold} for 5 minutes
+            - Threshold: !Ref AppDownscaleThreshold
+        Dimensions:
+          - Name: AutoScalingGroupName
+            Value: !Ref AppAutoscalingGroup
+        AlarmActions:
+          - !Ref AppScaleDownPolicy
+
+Outputs:
+  SquidProxyEndpointService:
+    Value: !Ref SquidProxyEndpointService

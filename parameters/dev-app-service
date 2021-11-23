@@ -1,0 +1,10 @@
+--stack-name dev-app-stack
+--parameter-overrides
+BucketName=
+EcrImageName=app-alpine
+VpcId=
+Subnets=
+Cname=app.senthil.skadoosh.com.au
+HostedzoneId=
+SharedSecretArn=
+SsmParameter=

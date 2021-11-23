@@ -1,0 +1,17 @@
+--stack-name dev-app-endpoint
+--parameter-overrides
+TemplatesS3Bucket=
+InstallationName=
+RuntimeEnvironment=
+Route53ZoneDomain=
+AppEndpointServiceNamePrefix=com.amazonaws.vpce.ap-southeast-2.
+AppEndpointServiceId=
+MonitoringTestUrl=
+AlarmSNSTopicArn=
+AppStatusLambdaCode=
+AppPort=8080
+VpcId=
+VpcCidr=
+SubnetA=
+SubnetB=
+SubnetC=

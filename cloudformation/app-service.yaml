@@ -1,19 +1,6 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: App Stack
 Parameters:
-  TemplatesS3Bucket:
-    Type: String
-    Description: S3 Bucket with the components templates
-  InstallationName:
-    Type: String
-    Description: Unique stack installation name
-  RuntimeEnvironment:
-    Type: String
-    Description: The runtime environment config tag
-    Default: dev
-  Route53ZoneDomain:
-    Type: String
-    Description: Route53 zone domain that represents the environment
   VpcId:
     Type: AWS::EC2::VPC::Id
     Description: VPC to deploy the App infrastructure into
@@ -32,19 +19,14 @@ Parameters:
   AppAMI:
     Description: AMI for App App instances
     Type: String
-    Default: ami-00e17d1165b9dd3ec
   AppInstanceClass:
     Description: App instance class
     Type: String
-    Default: t2.micro
+    Default: t3.micro
     AllowedValues:
-      - t2.micro
-      - m4.large
+      - t3.micro
+      - m5.large
     ConstraintDescription: Select a valid EC2 instance type
-  ServerTagSchedule:
-    Type: String
-    Description: Availability schedule tag to configure on the Cache instances
-    Default: 24x7
   AppELBAlias:
     Description: DNS alias for the App ELB
     Type: String
@@ -59,22 +41,19 @@ Parameters:
     Default: 250000000
   AppLogsDestinationArn:
     Type: String
-    Description: ARN of the corresponding CloudWatch destination in Logging Account
+    Description: ARN of the corresponding CloudWatch destination
     Default: ''
   AppLogRetention:
     Description: Log retention period (days)
     Type: Number
     Default: 14
-  AnsibleZip:
-    Description: S3 URL of a zip archive with the Ansible code for App bootstrap
-    Type: String
   RecycleLambdaCode:
     Type: String
     Description: S3 key with the Recycle lambda function source
   SslBumpEnabled:
     Type: String
     Description: Upload keys and certificates and configure App for SSL bump
-    Default: 'true'
+    Default: 'false'
     AllowedValues:
       - 'true'
       - 'false'
@@ -91,7 +70,7 @@ Parameters:
   AppPort:
     Type: Number
     Description: Port number App listens on
-    Default: 3128
+    Default: 8080
 
 Conditions:
   HaveAppLogsDestination: !Not [!Equals [!Ref AppLogsDestinationArn, ''] ]
@@ -142,25 +121,14 @@ Resources:
                 Resource:
                   - '*'
               - Action:
-                  - s3:ListBucket
-                Effect: Allow
-                Resource:
-                  - !Sub arn:aws:s3:::${TemplatesS3Bucket}
-              - Action:
-                  - s3:GetObject
-                Effect: Allow
-                Resource:
-                  - !Sub arn:aws:s3:::${TemplatesS3Bucket}/*
-              - Action:
                   - autoscaling:DescribeAutoScalingInstances
                   - autoscaling:CompleteLifecycleAction
                   - autoscaling:RecordLifecycleActionHeartbeat
                 Effect: Allow
                 Resource: '*'
-      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/EngineerBoundaryPolicy"
+      PermissionsBoundary: !Sub "arn:aws:iam::${AWS::AccountId}:policy/UserBoundaryPolicy"
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
     AppFarmMemberProfile:
       Type: AWS::IAM::InstanceProfile
@@ -187,7 +155,7 @@ Resources:
         VpcId: !Ref VpcId
         Tags:
           - Key: Name
-            Value: !Sub App-${InstallationName}
+            Value: !Sub App-Sg
 
     AppTargetGroup:
       Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -242,7 +210,7 @@ Resources:
       Type: AWS::ElasticLoadBalancingV2::LoadBalancer
       Properties:
         Type: network
-        Name: !Sub ${AppELBAlias}-service-endpoint-${InstallationName}
+        Name: !Sub ${AppELBAlias}-service-endpoint
         IpAddressType: ipv4
         Scheme: internal
         Subnets: !Ref PublicSubnets
@@ -280,9 +248,8 @@ Resources:
             Fn::Sub:
               - runcmd:
                   - ecr_endpoint=$(shell aws ecr get-authorization-token | jq -r '.authorizationData[] | .proxyEndpoint' | cut -b 9-)
-                  - docker pull ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EcrRepoName}:latest
-                  - docker run -t -d -p
-
+                  - docker pull ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AppImageRepository}:latest
+                  - docker run -t -d -p 8080:4246 ${AppImageRepository}:latest
               - ElasticIPs: !Sub ${AppEIP1.AllocationId},${AppEIP2.AllocationId},${AppEIP3.AllocationId}
 
     AppAutoscalingGroup:
@@ -302,9 +269,6 @@ Resources:
         Tags:
           - Key: Name
             Value: APP-SERVER
-            PropagateAtLaunch: True
-          - Key: Availability
-            Value: !Ref ServerTagSchedule
             PropagateAtLaunch: True
           - Key: Application
             Value: Go-Server

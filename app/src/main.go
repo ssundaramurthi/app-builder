@@ -17,5 +17,5 @@ func main() {
 	http.HandleFunc("/token", h.token)
 	http.HandleFunc("/metrics", h.metrics)
 	http.HandleFunc("/health", h.health)
-	log.Print(http.ListenAndServe(":8080", nil))
+	log.Print(http.ListenAndServe(":4246", nil))
 }

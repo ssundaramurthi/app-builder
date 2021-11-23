@@ -1,20 +1,27 @@
 FROM alpine:3.14
 ARG secret
-EXPOSE 80
+EXPOSE 4246
 
 RUN apk upgrade && apk add --no-cache git make musl-dev go bash
 
 # Configure Go
 ENV GOROOT /usr/lib/go
-ENV GOPATH /go
-ENV PATH /go/bin:$PATH
+ENV GOPATH /app-builder
+ENV PATH /app/bin:$PATH
 
 ENV SECRET $secret
 
 RUN mkdir -p ${GOPATH}/src ${GOPATH}/bin
 
-COPY app/src/*.go /go/src/
+COPY app/src/*.go ${GOPATH}/src/
 
-WORKDIR $GOPATH
+WORKDIR ${GOPATH}/src
+RUN go mod init app-builder
 
-ENTRYPOINT ["/bin/bash", "-c", "go run /go/src/main.go /go/src/handler.go"]
+RUN go build ${GOPATH}/src
+RUN cp ./app-builder ${GOPATH}/bin/
+RUN rm -fr ${GOPATH}/src/
+
+WORKDIR ${GOPATH}/bin
+
+ENTRYPOINT ["/bin/bash", "-c", "./app-builder"]

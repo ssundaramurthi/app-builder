@@ -8,7 +8,13 @@
 
 
 ## Workflow
+   - The below workflow deploys 3 pipelines namely
+     - pr-created
+     - pr-merged
+     - deploy
+
    ![Alt text](./screen/workflow.jpeg?raw=true "Pipeline Workflow")
+
 
 ## Assumptions
 1. This APP deployment and pipeline has been setup to work with AWS
@@ -32,7 +38,7 @@ APP-STG | stg-app-endpoint | Public VPC | cross-account-deploy-role |
 APP-STG | stg-app-service | Private VPC | cross-account-deploy-role |
 APP-PROD | prod-app-endpoint | Public VPC | cross-account-deploy-role |
 APP-PROD | prod-app-service | Private VPC | cross-account-deploy-role |
-* Public VPCs are classified as untrusted zones and will be disconnected from the 
+* Public VPCs are classified as untrusted zones and will stay disconnected. The services in Private VPC is accessible only via privatelink.
 
 
 ## Fixes Made to App

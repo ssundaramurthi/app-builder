@@ -1,0 +1,8 @@
+steps:
+  - label: "Run deployment followed by tests in Dev"
+    command:
+      - "echo Running deployment..."
+      - "${PWD}/app/scripts/deploy.sh dev"
+      - "echo Running tests... "
+      - "${PWD}/app/scripts/app-tests.sh"
+      - "echo Application Sanity checks successful in Dev"

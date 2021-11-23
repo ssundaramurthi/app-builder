@@ -1,0 +1,24 @@
+steps:
+  - label: "Run deployment in Dev"
+    command:
+      - "echo Running deployment..."
+      - "${PWD}/app/scripts/deploy.sh dev"
+      - "echo Running Application tests... "
+      - "app/scripts/app-tests.sh"
+      - "echo Application Sanity checks successful in Dev"
+
+  - label: "Deploy to non-prod"
+    trigger: "hmac-service-deploy"
+    build:
+      env:
+        STAGE: "staging"
+
+  - wait
+
+  - block: ":rocket: Release to Production"
+
+  - label: "Deploy to production"
+    trigger: "hmac-service-deploy"
+    build:
+      env:
+        STAGE: "prod"

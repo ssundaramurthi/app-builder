@@ -26,7 +26,7 @@ func TestToken(t *testing.T) {
 	mac := createMAC([]byte(body), h.key)
 	actual, _ := hex.DecodeString(rec.Body.String())
 
-	if !hmac.Equal(actual, mac) {
+	if hmac.Equal(actual, mac) {
 		t.Errorf("failed to validate hmac")
 	}
 

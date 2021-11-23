@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+// 	"log"
 )
 
 type handler struct {
@@ -19,21 +20,33 @@ func (h handler) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h handler) token(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	h.stats["requests"] += 1
+    w.Header().Set("Content-Type", "application/json")
+    h.stats["requests"] += 1
 
 	body, _ := io.ReadAll(r.Body)
-	out := createMAC(body, h.key)
-	fmt.Fprintf(w, "%x", out)
+    response, err := getJsonResponse(body, h.key)
+    if err != nil {
+        panic(err)
+    }
 
-	w.WriteHeader(201)
+	fmt.Fprintf(w, string(response))
+	w.WriteHeader(200)
 }
 
 func (h handler) metrics(w http.ResponseWriter, r *http.Request) {
-
 	enc := json.NewEncoder(w)
 	enc.Encode(h.stats)
 	w.WriteHeader(201)
+}
+
+func getJsonResponse(message, key []byte)([]byte, error)  {
+    out := createMAC(message, key)
+    mac := fmt.Sprintf("%x", out)
+
+    payload := make(map[string] string)
+    payload["hashcode"] = mac
+
+    return json.MarshalIndent(payload, "", "  ")
 }
 
 func createMAC(message, key []byte) []byte {

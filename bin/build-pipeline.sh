@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -euo pipefail
-
 export REPOSITORY=git@github.com:ssundaramurthi/app-builder.git
 
 CURRENT_DIR=$(pwd)
@@ -10,11 +8,12 @@ STATUS_CHECK=false
 
 USAGE="USAGE: $(basename "$0")
 
-Eg: build-pipeline
+Eg: build-pipeline --type pull-request
 
 NOTE: BUILDKITE_API_TOKEN, BUILDKITE_ORG_SLUG must be set in environment
 
 ARGUMENTS:
+    -t | --type           buildkite pipeline type <pr-opened|pr-merged|deploy> (required)
     -r | --repository     github repository url (optional, default: app-builder)
     -h | --help           show this help text"
 
@@ -25,15 +24,16 @@ while [ $# -gt 0 ]; do
     if [[ $1 =~ "--"* ]]; then
         case $1 in
             --help|-h) echo "$USAGE"; exit; ;;
+            --type|-t) PIPELINE_TYPE=$2;;
             --repository|-r) REPOSITORY=$2;;
         esac
     fi
     shift
 done
 
-export PIPELINE_NAME=app-builder-pipeline
+export PIPELINE_NAME=$PIPELINE_TYPE
 
-PIPELINE_CONFIG_FILE=./pipelines/app-builder-pipeline.json
+PIPELINE_CONFIG_FILE=${ROOT_DIR}/.buildkite/cfg/$PIPELINE_TYPE.json
 [ ! -f "$PIPELINE_CONFIG_FILE" ] && { echo "Invalid pipeline type: File not found $PIPELINE_CONFIG_FILE"; exit; }
 
 PIPELINE_CONFIG=$(cat $PIPELINE_CONFIG_FILE | envsubst)

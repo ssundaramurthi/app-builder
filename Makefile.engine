@@ -1,6 +1,6 @@
 SHELL:=/bin/bash
 
-deployecr:
+build-ecr-image:
 	$(eval ecr_endpoint:=$(shell aws ecr get-authorization-token | jq -r '.authorizationData[] | .proxyEndpoint' | cut -b 9- ))
 
 	aws ecr get-login-password | docker login --username AWS --password-stdin $(ecr_endpoint)
@@ -10,4 +10,3 @@ deployecr:
 	docker tag app-alpine:latest $(ecr_endpoint)/app-alpine:latest
 
 	docker push $(ecr_endpoint)/app-alpine:latest
-
